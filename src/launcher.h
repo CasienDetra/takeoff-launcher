@@ -1811,10 +1811,36 @@ private:
 
         std::wstring workingDir;
         if (!isProtocol) {
-            std::error_code ec;
-            fs::path p(path);
-            if (p.has_parent_path()) {
-                workingDir = p.parent_path().wstring();
+            // System executables live under %SystemRoot% (e.g. powershell.exe in
+            // System32\WindowsPowerShell\v1.0). Using their folder as working dir
+            // drops the user in System32. Start those in %USERPROFILE% instead so
+            // shells behave like a normal Start Menu / Terminal launch.
+            bool isSystemPath = false;
+            wchar_t winDirBuf[MAX_PATH]{};
+            if (GetWindowsDirectoryW(winDirBuf, MAX_PATH) > 0) {
+                std::wstring winStr(winDirBuf);
+                if (path.size() >= winStr.size() &&
+                    _wcsnicmp(path.c_str(), winStr.c_str(), winStr.size()) == 0 &&
+                    (path.size() == winStr.size() || path[winStr.size()] == L'\\')) {
+                    isSystemPath = true;
+                }
+            }
+            if (isSystemPath) {
+                workingDir = ExpandEnv(L"%USERPROFILE%");
+                if (workingDir.empty()) {
+                    PWSTR profile = nullptr;
+                    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, KF_FLAG_DEFAULT,
+                            nullptr, &profile)) && profile) {
+                        workingDir = profile;
+                        CoTaskMemFree(profile);
+                    }
+                }
+            } else {
+                std::error_code ec;
+                fs::path p(path);
+                if (p.has_parent_path()) {
+                    workingDir = p.parent_path().wstring();
+                }
             }
         }
         const wchar_t* dir = workingDir.empty() ? nullptr : workingDir.c_str();
